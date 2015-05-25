@@ -134,6 +134,7 @@ if [ $ret2 -eq 0 ]; then
 	ret=$?
 	echo "###### $(date) : LAST done (ret=$ret) ######"
 	echo "###### $(date) : Backup complete, removing temp dir $TEMP ######"
+	rm -rf "$TEMP"
 else
 	echo "###### $(date) : Errors found (ret2=$ret2), NOT updating the LAST link on $REMOTE::$BACKUP ######"
 	echo "###### $(date) : NOT removing temp dir $TEMP ######"
