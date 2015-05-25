@@ -88,8 +88,9 @@ DATE="$(date +%Y%m%d-%H%M%S)"
 
 mktemp
 
-# compute the exclude args (-e foo -e bar ...)
-EXCLARG=( )
+# compute the exclude args (--exclude foo --exclude bar ...). We start by excluding the
+# temporary directory in order not to save our log file.
+EXCLARG=( --exclude "${TEMP}/" )
 for excl in "${EXCLUDE[@]}"; do
 	EXCLARG[${#excl[@]}]="-e"
 	EXCLARG[${#excl[@]}]="$excl"
@@ -115,7 +116,7 @@ rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}/${DATE}" "$REMOTE::$BACKUP/${HOST
 echo "###### $(date) : Preparation done, starting backup now ######"
 
 
-echo "###### $(date) : Saving $fs to $REMOTE::$BACKUP ######"
+echo "###### $(date) : Saving (${FSLIST[@]}) to $REMOTE::$BACKUP ######"
 rsync --log-file="$TEMP/backup-$HOST-$DATE.log" -x -vaSHR --stats \
 	"${EXCLARG[@]}" --link-dest="/${HOST}/LAST/" \
 	"${FSLIST[@]}" "$REMOTE::$BACKUP/${HOST}/${DATE}/"
