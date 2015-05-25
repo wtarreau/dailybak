@@ -88,11 +88,11 @@ DATE="$(date +%Y%m%d-%H%M%S)"
 
 mktemp
 
-# compute the exclude args (--exclude foo --exclude bar ...). We start by excluding the
-# temporary directory in order not to save our log file.
+# compute the exclude args (--exclude foo --exclude bar ...). We start by
+# excluding the temporary directory in order not to save our log file.
 EXCLARG=( --exclude "${TEMP}/" )
 for excl in "${EXCLUDE[@]}"; do
-	EXCLARG[${#excl[@]}]="-e"
+	EXCLARG[${#excl[@]}]="--exclude"
 	EXCLARG[${#excl[@]}]="$excl"
 done
 
