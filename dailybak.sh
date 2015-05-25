@@ -14,9 +14,8 @@
 ##   -l <log>     : name of the log module on this server
 ##   -n <name>    : use this name as local host name for backups
 ##   -e <exclude> : pattern to exclude (may appear multiple times)
-##   <fs>         : directories to backup. The root must be named "rootfs" and
-##                  not "/" so that the name appears correctly as a directory
-##                  name on the backup server.
+##   <fs>         : absolute path to directories to backup. A "." in the middle
+##                  will mark the relative path (see man rsync -R).
 
 # Storage format :
 #   - <remote>::<backup>/<host>/<date>
@@ -98,48 +97,40 @@ done
 
 FSLIST=( "$@" )
 
+for fs in "${FSLIST[@]}"; do
+	[ -e "$fs" ] || die "FS <$fs> doesn't exist".
+done
+
 echo "###### $(date) : Creating ${HOST} on $REMOTE::$BACKUP ######"
 mkdir -p "${TEMP}/${HOST}" || die
-rsync -x -vaSH --stats "${TEMP}/${HOST}" "$REMOTE::$BACKUP/" || die
+rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" "$REMOTE::$BACKUP/" || die
 
 echo "###### $(date) : Creating ${HOST} on $REMOTE::$LOG ######"
-rsync -x -vaSH --stats "${TEMP}/${HOST}" "$REMOTE::$LOG/" || die
+rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" "$REMOTE::$LOG/" || die
 
 echo "###### $(date) : Creating ${HOST}/${DATE} on $REMOTE::$BACKUP ######"
 mkdir -p "${TEMP}/${HOST}/${DATE}" || die
-rsync -x -vaSH --stats "${TEMP}/${HOST}/${DATE}" "$REMOTE::$BACKUP/${HOST}/"
+rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}/${DATE}" "$REMOTE::$BACKUP/${HOST}/"
 
 echo "###### $(date) : Preparation done, starting backup now ######"
 
-ret2=0
-for fs in "${FSLIST[@]}"; do
-	# src="" for rootfs
-	src="${fs#rootfs}"
-	src="${src%/}"
-	dst="${fs#/}"
-	dst="${dst//\//.}"
 
-	echo "###### $(date) : Saving $fs to $REMOTE::$BACKUP ######"
+echo "###### $(date) : Saving $fs to $REMOTE::$BACKUP ######"
+rsync --log-file="$TEMP/backup-$HOST-$DATE.log" -x -vaSHR --stats \
+	"${EXCLARG[@]}" --link-dest="/${HOST}/LAST/" \
+	"${FSLIST[@]}" "$REMOTE::$BACKUP/${HOST}/${DATE}/"
+ret=$?
+ret2=$ret
+echo "return code: $ret" >> "$TEMP/backup-$HOST-$DATE.log"
+echo "###### $(date) : done ret=$ret ######"
 
-	rsync --log-file="$TEMP/backup-$HOST-$DATE-${dst//\//.}.log" -x -vaSH --stats \
-	      "${EXCLARG[@]}" --link-dest="/${HOST}/LAST/${dst}" \
-	      "${src}/" "$REMOTE::$BACKUP/${HOST}/${DATE}/${dst}"
-
-	ret=$?
-	[ $ret2 -eq 0 ] && ret2=$ret
-	echo "return code: $ret (since start of backup: $ret2)" >> \
-	     "$TEMP/backup-$HOST-$DATE-${dst//\//.}.log"
-
-	echo "###### $(date) : $fs done (ret=$ret, final=$ret2) ######"
-done
-
-rsync -x -vaSH --stats "$TEMP"/backup-*.log "$REMOTE::$LOG/${HOST}/"
+rsync -x -vaSH --no-R --stats "$TEMP"/backup-*.log "$REMOTE::$LOG/${HOST}/"
 
 # in case of success, update LAST to point to the current backup
 if [ $ret2 -eq 0 ]; then
 	echo "###### $(date) : Updating the LAST link on $REMOTE::$BACKUP ######"
 	ln -sf "$DATE" "$TEMP/LAST"
-	rsync -x --delete -vaSH --stats "${TEMP}/LAST" "$REMOTE::$BACKUP/${HOST}/"
+	rsync -x --delete -vaSH --no-R --stats "${TEMP}/LAST" "$REMOTE::$BACKUP/${HOST}/"
 	ret=$?
 	echo "###### $(date) : LAST done (ret=$ret) ######"
 	echo "###### $(date) : Backup complete, removing temp dir $TEMP ######"
