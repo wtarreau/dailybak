@@ -28,6 +28,7 @@
 PASSFILE=
 REMOTE=
 BACKUP=
+BACKPFX=
 LOG=
 TEMP=
 HOST="$(hostname)"
@@ -83,6 +84,15 @@ if [ -z "$REMOTE" -o -z "$BACKUP" -o -z "$LOG" ]; then
 	usage "All of remote, backup and log must be specified."
 fi
 
+# if the remote backup contains a slash, everything that follows the first "/"
+# is a directory prefix.
+if [ -z "${BACKUP##*/*}" ]; then
+	BACKPFX="${BACKUP#*/}"
+	BACKPFX="/${BACKPFX%/}"
+else
+	BACKPFX="/"
+fi
+
 if [ $# -eq 0 ]; then
 	usage "Nothing to do!"
 fi
@@ -121,7 +131,7 @@ echo "###### $(date) : Preparation done, starting backup now ######"
 
 echo "###### $(date) : Saving (${FSLIST[@]}) to $REMOTE::$BACKUP ######"
 rsync --log-file="$TEMP/backup-$HOST-$DATE.log" -x -vaSHR --stats \
-	"${EXCLARG[@]}" --link-dest="/${HOST}/LAST/" \
+	"${EXCLARG[@]}" --link-dest="${BACKPFX}/${HOST}/LAST/" \
 	"${FSLIST[@]}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/${DATE}/"
 ret=$?
 ret2=$ret
