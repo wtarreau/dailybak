@@ -6,10 +6,11 @@
 ## backup as a reference, then updates the link to the last known backup. The
 ## backup logs are also archived on the remote server.
 ##
-## Usage: dailybak -s <server> -b <backup> -l <log> [ -n <name> ]
+## Usage: dailybak -s <server> [-p <passfile>] -b <backup> -l <log> [-n <name>]
 ##                 [ -e <exclude> ]* <fs>*
 ##
 ##   -s <server>  : name/address of the remote server
+##   -p <passfile>: path to a file containing the server account's password
 ##   -b <backup>  : name of the backup module on this server
 ##   -l <log>     : name of the log module on this server
 ##   -n <name>    : use this name as local host name for backups
@@ -24,6 +25,7 @@
 #   - <remote>::<log>/<host>
 #     contains all the log files
 
+PASSFILE=
 REMOTE=
 BACKUP=
 LOG=
@@ -61,6 +63,7 @@ deltemp() {
 while [ -n "$1" -a -z "${1##-*}" ]; do
 	case "$1" in
 		"-s") REMOTE="$2" ; shift ;;
+		"-p") PASSFILE="$2" ; shift ;;
 		"-b") BACKUP="$2" ; shift ;;
 		"-l") LOG="$2" ; shift ;;
 		"-e") EXCLUDE[${#EXCLUDE[@]}]="$2" ; shift ;;
@@ -104,14 +107,14 @@ done
 
 echo "###### $(date) : Creating ${HOST} on $REMOTE::$BACKUP ######"
 mkdir -p "${TEMP}/${HOST}" || die
-rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" "$REMOTE::$BACKUP/" || die
+rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/" || die
 
 echo "###### $(date) : Creating ${HOST} on $REMOTE::$LOG ######"
-rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" "$REMOTE::$LOG/" || die
+rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$LOG/" || die
 
 echo "###### $(date) : Creating ${HOST}/${DATE} on $REMOTE::$BACKUP ######"
 mkdir -p "${TEMP}/${HOST}/${DATE}" || die
-rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}/${DATE}" "$REMOTE::$BACKUP/${HOST}/"
+rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}/${DATE}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
 
 echo "###### $(date) : Preparation done, starting backup now ######"
 
@@ -119,19 +122,19 @@ echo "###### $(date) : Preparation done, starting backup now ######"
 echo "###### $(date) : Saving (${FSLIST[@]}) to $REMOTE::$BACKUP ######"
 rsync --log-file="$TEMP/backup-$HOST-$DATE.log" -x -vaSHR --stats \
 	"${EXCLARG[@]}" --link-dest="/${HOST}/LAST/" \
-	"${FSLIST[@]}" "$REMOTE::$BACKUP/${HOST}/${DATE}/"
+	"${FSLIST[@]}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/${DATE}/"
 ret=$?
 ret2=$ret
 echo "return code: $ret" >> "$TEMP/backup-$HOST-$DATE.log"
 echo "###### $(date) : done ret=$ret ######"
 
-rsync -x -vaSH --no-R --stats "$TEMP"/backup-*.log "$REMOTE::$LOG/${HOST}/"
+rsync -x -vaSH --no-R --stats "$TEMP"/backup-*.log ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$LOG/${HOST}/"
 
 # in case of success, update LAST to point to the current backup
 if [ $ret2 -eq 0 ]; then
 	echo "###### $(date) : Updating the LAST link on $REMOTE::$BACKUP ######"
 	ln -sf "$DATE" "$TEMP/LAST"
-	rsync -x --delete -vaSH --no-R --stats "${TEMP}/LAST" "$REMOTE::$BACKUP/${HOST}/"
+	rsync -x --delete -vaSH --no-R --stats "${TEMP}/LAST" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
 	ret=$?
 	echo "###### $(date) : LAST done (ret=$ret) ######"
 	echo "###### $(date) : Backup complete, removing temp dir $TEMP ######"
