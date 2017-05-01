@@ -22,6 +22,9 @@
 #   - <remote>::<backup>/<host>/<date>
 #     contains all the data. <date> may be replaced with "LAST" which is a
 #     symlink to the latest successful backup.
+#     The date uses format <YYYYMMDD-HHMMSS>. A similar name followed by
+#     "-FAILED" may also be created as a symlink to this one if the backup
+#     failed.
 #   - <remote>::<log>/<host>
 #     contains all the log files
 
@@ -150,6 +153,9 @@ if [ $ret2 -eq 0 ]; then
 	echo "###### $(date) : Backup complete, removing temp dir $TEMP ######"
 	rm -rf "$TEMP"
 else
+	ln -sf "$DATE" "$TEMP/${DATE}-FAILED"
+	rsync -x --delete -vaSH --no-R --stats "${TEMP}/${DATE}-FAILED" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+	ret=$?
 	echo "###### $(date) : Errors found (ret2=$ret2), NOT updating the LAST link on $REMOTE::$BACKUP ######"
 	echo "###### $(date) : NOT removing temp dir $TEMP ######"
 fi
