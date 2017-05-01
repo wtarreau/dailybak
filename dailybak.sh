@@ -126,6 +126,70 @@ check_existing() {
 	return 0
 }
 
+# creates the target directory and log file. Returns 0 on success otherwise
+# non-zero.
+prepare_backup() {
+	echo "###### $(date) : Creating ${HOST} on $REMOTE::$BACKUP ######"
+	mkdir -p "${TEMP}/${HOST}" || return 1
+	rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/" || return 1
+
+	echo "###### $(date) : Creating ${HOST} on $REMOTE::$LOG ######"
+	rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$LOG/" || return 1
+
+	echo "###### $(date) : Creating ${HOST}/${DATE} on $REMOTE::$BACKUP ######"
+	mkdir -p "${TEMP}/${HOST}/${DATE}" || return 1
+	rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}/${DATE}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/" || return 1
+
+	echo "###### $(date) : Preparation done ######"
+}
+
+# performs a complete backup of the requested fslist. Returns 0 on success
+# otherwise non-zero. Note: a failure to upload the log file is not counted as
+# a backup failure.
+perform_backup() {
+	local ret ret2
+
+	echo "###### $(date) : Saving (${FSLIST[@]}) to $REMOTE::$BACKUP ######"
+
+	# compute the exclude args (--exclude foo --exclude bar ...). We start by
+	# excluding the temporary directory in order not to save our log file.
+	EXCLARG=( --exclude "${TEMP}/" )
+	for excl in "${EXCLUDE[@]}"; do
+		EXCLARG[${#excl[@]}]="--exclude"
+		EXCLARG[${#excl[@]}]="$excl"
+	done
+
+	rsync --log-file="$TEMP/backup-$HOST-$DATE.log" -x -vaSHR --stats \
+	      "${EXCLARG[@]}" --link-dest="${BACKPFX}/${HOST}/LAST/" \
+	      "${FSLIST[@]}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/${DATE}/"
+	ret=$?
+	ret2=$ret
+	echo "return code: $ret" >> "$TEMP/backup-$HOST-$DATE.log"
+	echo "###### $(date) : done ret=$ret ######"
+
+	echo "###### $(date) : Uploading the log file to $REMOTE::$LOG ######"
+	rsync -x -vaSH --no-R --stats "$TEMP"/backup-*.log ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$LOG/${HOST}/"
+	ret=$?
+	echo "###### $(date) : done ret=$ret ######"
+
+	# in case of success, update LAST to point to the current backup
+	if [ $ret2 -ne 0 ]; then
+		echo "###### $(date) : Errors found (ret2=$ret2), NOT updating the LAST link on $REMOTE::$BACKUP ######"
+		return $ret2
+	fi
+
+	echo "###### $(date) : Updating the LAST link and adding the OK link on $REMOTE::$BACKUP ######"
+	ln -sf "$DATE" "$TEMP/LAST"
+	ln -sf "$DATE" "$TEMP/${DATE}-OK"
+	rsync -x --delete -vaSH --no-R --stats "${TEMP}/LAST" "${TEMP}/${DATE}-OK" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+	ret=$?
+	echo "###### $(date) : LAST done (ret=$ret) ######"
+	return 0
+}
+
+#
+# MAIN entry point
+#
 while [ -n "$1" -a -z "${1##-*}" ]; do
 	case "$1" in
 		"-s") REMOTE="$2" ; shift ;;
@@ -150,6 +214,12 @@ if [ -z "$REMOTE" -o -z "$BACKUP" ]; then
 	usage "Fatal: Both remote and backup must be specified."
 fi
 
+FSLIST=( "$@" )
+
+if [ -z "$LIST_ONLY" -a ${#FSLIST[@]} -eq 0 ]; then
+	usage "Fatal: Nothing to do!"
+fi
+
 # if the remote backup contains a slash, everything that follows the first "/"
 # is a directory prefix.
 if [ -z "${BACKUP##*/*}" ]; then
@@ -171,68 +241,27 @@ if [ -n "$LIST_ONLY" ]; then
 	exit 0
 fi
 
-if [ -z "$LOG" ]; then
-	usage "Fatal: The log module must be specified (-l)."
-fi
+ret=0
+if [ ${#FSLIST[@]} -gt 0 ]; then
+	if [ -z "$LOG" ]; then
+		usage "Fatal: The log module must be specified (-l)."
+	fi
 
-if [ $# -eq 0 ]; then
-	usage "Fatal: Nothing to do!"
-fi
+	for fs in "${FSLIST[@]}"; do
+		[ -e "$fs" ] || die "FS <$fs> doesn't exist".
+	done
 
-mktemp
+	mktemp
 
-# compute the exclude args (--exclude foo --exclude bar ...). We start by
-# excluding the temporary directory in order not to save our log file.
-EXCLARG=( --exclude "${TEMP}/" )
-for excl in "${EXCLUDE[@]}"; do
-	EXCLARG[${#excl[@]}]="--exclude"
-	EXCLARG[${#excl[@]}]="$excl"
-done
-
-FSLIST=( "$@" )
-
-for fs in "${FSLIST[@]}"; do
-	[ -e "$fs" ] || die "FS <$fs> doesn't exist".
-done
-
-echo "###### $(date) : Creating ${HOST} on $REMOTE::$BACKUP ######"
-mkdir -p "${TEMP}/${HOST}" || die
-rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/" || die
-
-echo "###### $(date) : Creating ${HOST} on $REMOTE::$LOG ######"
-rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$LOG/" || die
-
-echo "###### $(date) : Creating ${HOST}/${DATE} on $REMOTE::$BACKUP ######"
-mkdir -p "${TEMP}/${HOST}/${DATE}" || die
-rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}/${DATE}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
-
-echo "###### $(date) : Preparation done, starting backup now ######"
-
-
-echo "###### $(date) : Saving (${FSLIST[@]}) to $REMOTE::$BACKUP ######"
-rsync --log-file="$TEMP/backup-$HOST-$DATE.log" -x -vaSHR --stats \
-	"${EXCLARG[@]}" --link-dest="${BACKPFX}/${HOST}/LAST/" \
-	"${FSLIST[@]}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/${DATE}/"
-ret=$?
-ret2=$ret
-echo "return code: $ret" >> "$TEMP/backup-$HOST-$DATE.log"
-echo "###### $(date) : done ret=$ret ######"
-
-rsync -x -vaSH --no-R --stats "$TEMP"/backup-*.log ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$LOG/${HOST}/"
-
-# in case of success, update LAST to point to the current backup
-if [ $ret2 -eq 0 ]; then
-	echo "###### $(date) : Updating the LAST link and adding the OK link on $REMOTE::$BACKUP ######"
-	ln -sf "$DATE" "$TEMP/LAST"
-	ln -sf "$DATE" "$TEMP/${DATE}-OK"
-	rsync -x --delete -vaSH --no-R --stats "${TEMP}/LAST" "${TEMP}/${DATE}-OK" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+	prepare_backup && perform_backup
 	ret=$?
-	echo "###### $(date) : LAST done (ret=$ret) ######"
-	echo "###### $(date) : Backup complete, removing temp dir $TEMP ######"
-	rm -rf "$TEMP"
-else
-	echo "###### $(date) : Errors found (ret2=$ret2), NOT updating the LAST link on $REMOTE::$BACKUP ######"
-	echo "###### $(date) : NOT removing temp dir $TEMP ######"
+
+	if [ $ret -eq 0 ]; then
+		echo "###### $(date) : Backup complete, removing temp dir $TEMP ######"
+		rm -rf "$TEMP"
+	else
+		echo "###### $(date) : NOT removing temp dir $TEMP ######"
+	fi
 fi
 
-exit $ret2
+exit $ret
