@@ -7,7 +7,7 @@
 ## backup logs are also archived on the remote server.
 ##
 ## Usage: dailybak -s <server> [-p <passfile>] -b <backup> -l <log> [-n <name>]
-##                 [ -e <exclude> ]* [ -L | <fs>* ]
+##                 [ -e <exclude> ]* [ -k <period> ]* [-P] [ -L | <fs>* ]
 ##
 ##   -s <server>  : name/address of the remote server
 ##   -p <passfile>: path to a file containing the server account's password
@@ -15,7 +15,11 @@
 ##   -l <log>     : name of the log module on this server
 ##   -n <name>    : use this name as local host name for backups
 ##   -e <exclude> : pattern to exclude (may appear multiple times)
-##   -L           : only list backups existing on the remote server
+##   -k [dur:cnt] : add a conservation rule to only keep <cnt> backups over the
+##                  next <dur> days past the previous period, eg 2/wk, 1/mo,
+##                  1/q, 1/yr, 2/3yr : -k 7:2 -k 24:1 -k 60:1 -k 275:1 -k 730:2
+##   -P           : purge instead of just listing outdated backups with -k
+##   -L           : only list all backups existing on the remote server
 ##   <fs>         : absolute path to directories to backup. A "." in the middle
 ##                  will mark the relative path (see man rsync -R).
 
@@ -40,6 +44,8 @@ HOST="$(hostname)"
 SCRIPT="$0"
 TMPDIR="${TMPDIR:-/tmp}"
 LIST_ONLY=
+PERIODS=( )
+PURGE=
 
 # list of good and bad backup dirs, with their respective age in days
 GOOD_DIR=( )
@@ -192,6 +198,154 @@ perform_backup() {
 	return 0
 }
 
+# Deletes (or only reports a backup) to be deleted in $2 with good
+# or bad backup status in $1 ("good" or "bad") and optional age in
+# $3.
+delete_backup() {
+	if [ -n "$PURGE" ]; then
+		# in order to purge, we upload an empty dir over the one we
+		# want to kill. The trick is to use '/***' to remove the dir
+		# contents as well as the entry. For the symlink, we upload
+		# the empty dir over the link itself.
+		mktemp
+		mkdir -p "$TEMP/empty" || return 1
+
+		if [ "$1" = "good" ]; then
+			echo "Deleting successful backup $2 (age $3 days)"
+			rsync -r --delete --include "/$2/***" --exclude='*' "$TEMP/empty/" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+			rsync -r --delete --include "/$2-OK" --exclude='*' "$TEMP/empty/" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+		elif [ "$1" = "bad" ]; then
+			echo "Deleting failed backup $2 (age $3 days)"
+			rsync -r --delete --include "/$2/***" --exclude='*' "$TEMP/empty/" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+		fi
+	else
+		if [ "$1" = "good" ]; then
+			echo "Would delete successful backup $2 (age $3 days)"
+		elif [ "$1" = "bad" ]; then
+			echo "Would delete failed backup $2 (age $3 days)"
+		fi
+	fi
+}
+
+# Evaluates what entries to kill inside a period. $1 is the oldest date to
+# study. $2 is the first one *not* studied. $3 is the max number of
+# entries to keep within that period. $4 indicates what was found in the
+# previous period :
+#   0 = period is empty
+#   1 = period contains only failed backups
+#   2 = period contains at least one good backup
+#   3 = period contains all expected full backups
+#
+# The same value is returned so that it can be passed to compute the next
+# period. The fact that the incompleteness of the last period was covered
+# is also accounted for.
+#
+# Successful backups and failed backups are kept using the same algorithm,
+# except that successful ones are always considered first and that failed
+# backups are only considered as a complement for successful ones so that
+# they are always removed after there are enough remaining total backups
+# left.
+purge_period() {
+	local from=$1 to=$2 max=$3 last=$4
+	local good=0 bad=0 back
+
+	back=$((${#GOOD_AGE[@]} - 1))
+	while [ $back -ge 0 ] && [ ${GOOD_AGE[back]} -le $from ]; do
+		if [ ${GOOD_AGE[back]} -ge $to ]; then
+			((good++))
+		fi
+		((back--));
+	done
+
+	back=$((${#BAD_AGE[@]} - 1))
+	while [ $back -ge 0 ] && [ ${BAD_AGE[back]} -le $from ]; do
+		[ ${BAD_AGE[back]} -lt $to ] || ((bad++))
+		((back--));
+	done
+
+	# remove extra good entries from the lastest ones to the oldest ones
+	back=$((${#GOOD_AGE[@]} - 1))
+	while [ $back -ge 0 -a $good -gt $max ] && [ ${GOOD_AGE[back]} -le $from ]; do
+		if [ ${GOOD_AGE[back]} -ge $to ]; then
+			if [ $last -ge 3 ]; then
+				delete_backup good "${GOOD_DIR[back]}" "${GOOD_AGE[back]}"
+			else
+				last=3
+			fi
+			((good--))
+		fi
+		((back--));
+	done
+
+	# now remove remaining failed backups if not needed. They're counted
+	# like successful ones in order to plug holes.
+	back=$((${#BAD_AGE[@]} - 1))
+	while [ $back -ge 0 -a $((good + bad)) -gt $max ] && [ ${BAD_AGE[back]} -le $from ]; do
+		if [ ${BAD_AGE[back]} -ge $to ]; then
+			if [ $last -ge 1 ]; then
+				delete_backup bad "${BAD_DIR[back]}" "${BAD_AGE[back]}"
+			else
+				last=1
+			fi
+			((bad--))
+		fi
+		((back--));
+	done
+
+	[ $good -ge $((max + (last < 3))) ] && return 3
+	[ $good -gt 0 ] && return 2
+	[ $bad -ge $((max + (last < 1))) ] && return 1
+	return 0
+}
+
+# Iterates over all conservation periods from most recent to oldest and runs
+# the purge with the appropriate arguments. Each period is known as <days:cnt>
+# where <days> is the number of days after the previous period, and <cnt> is
+# the max number of entries to keep. For example, the four following periods :
+#
+#   <7:2> <31:1> <91:1> <366:1>
+#
+# will have for effect to keep 2 backups over the last 7 days, 1 over the
+# last 8..38 days, 1 over the last 39..130 days, 1 over the last 130..495
+# days. The following periods will keep one backup over the last week, 1
+# over the last month, one over the last quarter and one over the last year :
+#
+#   <7:1> <24:1> <60:1> <275:1>
+#
+# There's an implicit closing period starting after the last one with cnt=0
+# to flush whatever older is found (68 years back, ~= 2^31 seconds).
+# The current day's backup is always kept.
+#
+purge_old() {
+	local from to cnt last
+	local period
+
+	# Consider today's backup to know how to start
+	if [ ${#GOOD_AGE[@]} -gt 0 ] && [ ${GOOD_AGE[${#GOOD_AGE[@]}-1]} -eq 0 ]; then
+		# good backup for today
+		last=3
+	elif [ ${#BAD_AGE[@]} -gt 0 ] && [ ${BAD_AGE[${#BAD_AGE[@]}-1]} -eq 0 ]; then
+		# failed backup for today
+		last=1
+	else
+		# no backup for today
+		last=0
+	fi
+
+	from=0
+	for period in ${PERIODS[@]} ""; do
+		to=$((from + 1))
+		from=24837; cnt=0
+		if [ -n "$period" ]; then
+			from=$((${period%:*} + to - 1))
+			cnt="${period##*:}"
+		fi
+		purge_period "$from" "$to" "$cnt" "$last"
+		last=$?
+	done
+	return 0
+}
+
 #
 # MAIN entry point
 #
@@ -202,9 +356,15 @@ while [ -n "$1" -a -z "${1##-*}" ]; do
 		"-b") BACKUP="$2" ; shift ;;
 		"-l") LOG="$2" ; shift ;;
 		"-e") EXCLUDE[${#EXCLUDE[@]}]="$2" ; shift ;;
+		"-k") if [ -z "$2" -o -n "${2##*:*}" ]; then
+			      usage "Fatal: Invalid period '$2', must be <days:count>."
+		      fi
+		      PERIODS[${#PERIODS[@]}]="$2" ;
+		      shift ;;
 		"-n") HOST="$2" ; shift ;;
 		"-h"|"--help") usage ;;
 		"-L") LIST_ONLY=1 ;;
+		"-P") PURGE=1 ;;
 		"--") shift ; break ;;
 		*) usage "Fatal: Unknown argument : '$1'" ;;
 	esac
@@ -221,7 +381,7 @@ fi
 
 FSLIST=( "$@" )
 
-if [ -z "$LIST_ONLY" -a ${#FSLIST[@]} -eq 0 ]; then
+if [ -z "$LIST_ONLY" -a ${#FSLIST[@]} -eq 0 -a ${#PERIODS[@]} -eq 0 ]; then
 	usage "Fatal: Nothing to do!"
 fi
 
@@ -266,6 +426,12 @@ if [ ${#FSLIST[@]} -gt 0 ]; then
 	else
 		echo "###### $(date) : NOT removing temp dir $TEMP ######"
 	fi
+fi
+
+# take care of old backups purge if needed
+if [ ${#PERIODS[@]} -gt 0 ]; then
+	check_existing || exit $?
+	purge_old
 fi
 
 # only remove the temporary directory if there was no backup error
