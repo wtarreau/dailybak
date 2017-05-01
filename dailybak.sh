@@ -7,7 +7,7 @@
 ## backup logs are also archived on the remote server.
 ##
 ## Usage: dailybak -s <server> [-p <passfile>] -b <backup> -l <log> [-n <name>]
-##                 [ -e <exclude> ]* <fs>*
+##                 [ -e <exclude> ]* [ -L | <fs>* ]
 ##
 ##   -s <server>  : name/address of the remote server
 ##   -p <passfile>: path to a file containing the server account's password
@@ -15,6 +15,7 @@
 ##   -l <log>     : name of the log module on this server
 ##   -n <name>    : use this name as local host name for backups
 ##   -e <exclude> : pattern to exclude (may appear multiple times)
+##   -L           : only list backups existing on the remote server
 ##   <fs>         : absolute path to directories to backup. A "." in the middle
 ##                  will mark the relative path (see man rsync -R).
 
@@ -37,6 +38,7 @@ TEMP=
 HOST="$(hostname)"
 SCRIPT="$0"
 TMPDIR="${TMPDIR:-/tmp}"
+LIST_ONLY=
 
 die() {
 	echo "Fatal: $*"
@@ -73,6 +75,7 @@ while [ -n "$1" -a -z "${1##-*}" ]; do
 		"-e") EXCLUDE[${#EXCLUDE[@]}]="$2" ; shift ;;
 		"-n") HOST="$2" ; shift ;;
 		"-h"|"--help") usage ;;
+		"-L") LIST_ONLY=1 ;;
 		"--") shift ; break ;;
 		*) usage "Unknown argument : '$1'" ;;
 	esac
@@ -83,8 +86,8 @@ if [ -z "$HOST" ]; then
 	usage "Unknown local hostname. Force it with '-n'."
 fi
 
-if [ -z "$REMOTE" -o -z "$BACKUP" -o -z "$LOG" ]; then
-	usage "All of remote, backup and log must be specified."
+if [ -z "$REMOTE" -o -z "$BACKUP" ]; then
+	usage "Both remote and backup must be specified."
 fi
 
 # if the remote backup contains a slash, everything that follows the first "/"
@@ -96,11 +99,20 @@ else
 	BACKPFX="/"
 fi
 
+DATE="$(date +%Y%m%d-%H%M%S)"
+
+if [ -n "$LIST_ONLY" ]; then
+	rsync --no-h --list-only ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+	exit $?
+fi
+
+if [ -z "$LOG" ]; then
+	usage "The log module must be specified (-l)."
+fi
+
 if [ $# -eq 0 ]; then
 	usage "Nothing to do!"
 fi
-
-DATE="$(date +%Y%m%d-%H%M%S)"
 
 mktemp
 
