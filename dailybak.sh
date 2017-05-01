@@ -33,6 +33,7 @@ PASSFILE=
 REMOTE=
 BACKUP=
 BACKPFX=
+EXCLUDE=( )
 LOG=
 TEMP=
 HOST="$(hostname)"
