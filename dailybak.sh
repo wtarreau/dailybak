@@ -77,17 +77,17 @@ while [ -n "$1" -a -z "${1##-*}" ]; do
 		"-h"|"--help") usage ;;
 		"-L") LIST_ONLY=1 ;;
 		"--") shift ; break ;;
-		*) usage "Unknown argument : '$1'" ;;
+		*) usage "Fatal: Unknown argument : '$1'" ;;
 	esac
 	shift
 done
 
 if [ -z "$HOST" ]; then
-	usage "Unknown local hostname. Force it with '-n'."
+	usage "Fatal: Unknown local hostname. Force it with '-n'."
 fi
 
 if [ -z "$REMOTE" -o -z "$BACKUP" ]; then
-	usage "Both remote and backup must be specified."
+	usage "Fatal: Both remote and backup must be specified."
 fi
 
 # if the remote backup contains a slash, everything that follows the first "/"
@@ -107,11 +107,11 @@ if [ -n "$LIST_ONLY" ]; then
 fi
 
 if [ -z "$LOG" ]; then
-	usage "The log module must be specified (-l)."
+	usage "Fatal: The log module must be specified (-l)."
 fi
 
 if [ $# -eq 0 ]; then
-	usage "Nothing to do!"
+	usage "Fatal: Nothing to do!"
 fi
 
 mktemp
