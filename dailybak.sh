@@ -414,6 +414,12 @@ if [ ${#FSLIST[@]} -gt 0 ]; then
 
 	for fs in "${FSLIST[@]}"; do
 		[ -e "$fs" ] || die "FS <$fs> doesn't exist".
+		if [ "$fs" = "/" -o "${fs%/}" = "/var" -o "${fs%/}" = "/usr" \
+		     -o "${fs%/}" = "/etc" -o "${fs%/}" = "/root" \
+		     -o "${fs%/}" = "/home" -o "${fs%/}" = "/opt" \
+		     -o "${fs%/}" = "/boot" ] && [ "$(id -u)" != "0" ]; then
+			die "Saving $fs requires to be run by root."
+		fi
 	done
 
 	mktemp
