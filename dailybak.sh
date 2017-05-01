@@ -24,8 +24,8 @@
 #     contains all the data. <date> may be replaced with "LAST" which is a
 #     symlink to the latest successful backup.
 #     The date uses format <YYYYMMDD-HHMMSS>. A similar name followed by
-#     "-FAILED" may also be created as a symlink to this one if the backup
-#     failed.
+#     "-OK" will also be created as a symlink to this one if the backup
+#     succeeded.
 #   - <remote>::<log>/<host>
 #     contains all the log files
 
@@ -87,7 +87,7 @@ check_existing() {
 	GOOD_DIR=( ); GOOD_AGE=( ); BAD_DIR=( ); BAD_AGE=( ); ALL_BK=( )
 
 	# builds a list of all dated backups dirs, with failed links placed
-	# immediately after the directory name. Also ignore dead failed links.
+	# immediately after the directory name. Also ignore dead links.
 
 	list=( $(set -o pipefail; \
 	         rsync --no-h --list-only ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/" | \
@@ -107,18 +107,18 @@ check_existing() {
 			fi
 		fi
 
-		if [ -n "$bk" -a -z "${bk##*-FAILED}" ]; then
-			if [ -n "$last" -a "$last" = "${bk%-FAILED}" ]; then
-				BAD_DIR[${#BAD_DIR[@]}]="$last"
-				BAD_AGE[${#BAD_AGE[@]}]="$age"
-				ALL_BK[${#ALL_BK[@]}]="$last $age FAILURE"
+		if [ -n "$bk" -a -z "${bk##*-OK}" ]; then
+			if [ -n "$last" -a "$last" = "${bk%-OK}" ]; then
+				GOOD_DIR[${#GOOD_DIR[@]}]="$last"
+				GOOD_AGE[${#GOOD_AGE[@]}]="$age"
+				ALL_BK[${#ALL_BK[@]}]="$last $age SUCCESS"
 			fi
 			last=""
 		else
 			if [ -n "$last" ]; then
-				GOOD_DIR[${#GOOD_DIR[@]}]="$last"
-				GOOD_AGE[${#GOOD_AGE[@]}]="$age"
-				ALL_BK[${#ALL_BK[@]}]="$last $age SUCCESS"
+				BAD_DIR[${#BAD_DIR[@]}]="$last"
+				BAD_AGE[${#BAD_AGE[@]}]="$age"
+				ALL_BK[${#ALL_BK[@]}]="$last $age FAILURE"
 			fi
 			last="$bk"
 		fi
@@ -222,17 +222,15 @@ rsync -x -vaSH --no-R --stats "$TEMP"/backup-*.log ${PASSFILE:+--password-file "
 
 # in case of success, update LAST to point to the current backup
 if [ $ret2 -eq 0 ]; then
-	echo "###### $(date) : Updating the LAST link on $REMOTE::$BACKUP ######"
+	echo "###### $(date) : Updating the LAST link and adding the OK link on $REMOTE::$BACKUP ######"
 	ln -sf "$DATE" "$TEMP/LAST"
-	rsync -x --delete -vaSH --no-R --stats "${TEMP}/LAST" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+	ln -sf "$DATE" "$TEMP/${DATE}-OK"
+	rsync -x --delete -vaSH --no-R --stats "${TEMP}/LAST" "${TEMP}/${DATE}-OK" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
 	ret=$?
 	echo "###### $(date) : LAST done (ret=$ret) ######"
 	echo "###### $(date) : Backup complete, removing temp dir $TEMP ######"
 	rm -rf "$TEMP"
 else
-	ln -sf "$DATE" "$TEMP/${DATE}-FAILED"
-	rsync -x --delete -vaSH --no-R --stats "${TEMP}/${DATE}-FAILED" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
-	ret=$?
 	echo "###### $(date) : Errors found (ret2=$ret2), NOT updating the LAST link on $REMOTE::$BACKUP ######"
 	echo "###### $(date) : NOT removing temp dir $TEMP ######"
 fi
