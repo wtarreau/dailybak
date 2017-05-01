@@ -41,6 +41,15 @@ SCRIPT="$0"
 TMPDIR="${TMPDIR:-/tmp}"
 LIST_ONLY=
 
+# list of good and bad backup dirs, with their respective age in days
+GOOD_DIR=( )
+GOOD_AGE=( )
+BAD_DIR=( )
+BAD_AGE=( )
+
+# list of all backups in the form of [ <dir> <age> "SUCCESS"|"FAILURE" ]
+ALL_BK=( )
+
 die() {
 	echo "Fatal: $*"
 	exit 1
@@ -65,6 +74,56 @@ mktemp() {
 
 deltemp() {
 	[ -z "$TEMP" ] || rm -rf "$TEMP"
+}
+
+# fills {GOOD|BAD}_{DIR|AGE}[] and ALL_BK[] with the list, age and statuses of
+# the backups found on the server.
+check_existing() {
+	local bk now age
+	local list=( )
+	local last=""
+
+	# resets a possible previously established list
+	GOOD_DIR=( ); GOOD_AGE=( ); BAD_DIR=( ); BAD_AGE=( ); ALL_BK=( )
+
+	# builds a list of all dated backups dirs, with failed links placed
+	# immediately after the directory name. Also ignore dead failed links.
+
+	list=( $(set -o pipefail; \
+	         rsync --no-h --list-only ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/" | \
+	         cut -c44- | grep '^[0-9]' | sort)
+	     )
+	[ $? = 0 ] || return $?
+
+	now=$(date +%s)
+	for bk in "${list[@]}" ""; do
+		if [ -n "$last" ]; then
+			# convert to "YYYYMMDD-HHMMSS" to "YYYYMMDD HH:MM:SS", then to days,
+			# rounded up by 0.5 day. Failed conversions keep an age of zero.
+			if age=$(date +%s -d "${last:0:8} ${last:9:2}:${last:11:2}:${last:13:2}" 2>/dev/null); then
+				age=$(((now - age + 43200) / 86400))
+			else
+				age=0
+			fi
+		fi
+
+		if [ -n "$bk" -a -z "${bk##*-FAILED}" ]; then
+			if [ -n "$last" -a "$last" = "${bk%-FAILED}" ]; then
+				BAD_DIR[${#BAD_DIR[@]}]="$last"
+				BAD_AGE[${#BAD_AGE[@]}]="$age"
+				ALL_BK[${#ALL_BK[@]}]="$last $age FAILURE"
+			fi
+			last=""
+		else
+			if [ -n "$last" ]; then
+				GOOD_DIR[${#GOOD_DIR[@]}]="$last"
+				GOOD_AGE[${#GOOD_AGE[@]}]="$age"
+				ALL_BK[${#ALL_BK[@]}]="$last $age SUCCESS"
+			fi
+			last="$bk"
+		fi
+	done
+	return 0
 }
 
 while [ -n "$1" -a -z "${1##-*}" ]; do
@@ -103,8 +162,13 @@ fi
 DATE="$(date +%Y%m%d-%H%M%S)"
 
 if [ -n "$LIST_ONLY" ]; then
-	rsync --no-h --list-only ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
-	exit $?
+	check_existing || exit $?
+	(echo "Directory_name  Age Status"
+	 echo "--------------- --- -------"
+	 for i in "${ALL_BK[@]}"; do
+		echo $i
+	 done) | column -t
+	exit 0
 fi
 
 if [ -z "$LOG" ]; then
