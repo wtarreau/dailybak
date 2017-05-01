@@ -65,15 +65,20 @@ usage() {
 	exit $?
 }
 
+# creates a temporary directory and returns it in TEMP, does nothing
+# if TEMP was already created.
 mktemp() {
+	[ -z "$TEMP" ] || return 0
 	TEMP="$TMPDIR/${SCRIPT##*/}.$$.$RANDOM"
 	while ! mkdir -m 0700 "$TEMP"; do
 		TEMP="$TMPDIR/${SCRIPT##*/}.$$.$RANDOM"
 	done
 }
 
+# removes a possibly existing temporary directory and unsets TEMP
 deltemp() {
 	[ -z "$TEMP" ] || rm -rf "$TEMP"
+	TEMP=
 }
 
 # fills {GOOD|BAD}_{DIR|AGE}[] and ALL_BK[] with the list, age and statuses of
@@ -258,10 +263,11 @@ if [ ${#FSLIST[@]} -gt 0 ]; then
 
 	if [ $ret -eq 0 ]; then
 		echo "###### $(date) : Backup complete, removing temp dir $TEMP ######"
-		rm -rf "$TEMP"
 	else
 		echo "###### $(date) : NOT removing temp dir $TEMP ######"
 	fi
 fi
 
+# only remove the temporary directory if there was no backup error
+[ $ret -ne 0 ] || deltemp
 exit $ret
