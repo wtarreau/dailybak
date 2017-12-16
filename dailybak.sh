@@ -9,7 +9,7 @@
 ## Usage: dailybak -s <server> [-p <passfile>] -b <backup> -l <log> [-n <name>]
 ##                 [ -e <exclude> ]* [ -k <period> ]* [-P] [ -L | <fs>* ]
 ##
-##   -s <server>  : name/address of the remote server
+##   -s <server>  : name/address of the remote server. Empty for local FS.
 ##   -p <passfile>: path to a file containing the server account's password
 ##   -b <backup>  : name of the backup module on this server
 ##   -l <log>     : name of the log module on this server
@@ -101,7 +101,7 @@ check_existing() {
 	# immediately after the directory name. Also ignore dead links.
 
 	list=( $(set -o pipefail; \
-	         rsync --no-h --list-only ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/" | \
+	         rsync --no-h --list-only ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${BACKUP}/${HOST}/" | \
 	         cut -c44- | grep '^[0-9]' | sort)
 	     )
 	[ $? = 0 ] || return $?
@@ -140,16 +140,16 @@ check_existing() {
 # creates the target directory and log file. Returns 0 on success otherwise
 # non-zero.
 prepare_backup() {
-	echo "###### $(date) : Creating ${HOST} on $REMOTE::$BACKUP ######"
+	echo "###### $(date) : Creating ${HOST} on ${REMOTE}${BACKUP} ######"
 	mkdir -p "${TEMP}/${HOST}" || return 1
-	rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/" || return 1
+	rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${BACKUP}/" || return 1
 
-	echo "###### $(date) : Creating ${HOST} on $REMOTE::$LOG ######"
-	rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$LOG/" || return 1
+	echo "###### $(date) : Creating ${HOST} on ${REMOTE}${LOG} ######"
+	rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}" ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${LOG}/" || return 1
 
-	echo "###### $(date) : Creating ${HOST}/${DATE} on $REMOTE::$BACKUP ######"
+	echo "###### $(date) : Creating ${HOST}/${DATE} on ${REMOTE}${BACKUP} ######"
 	mkdir -p "${TEMP}/${HOST}/${DATE}" || return 1
-	rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}/${DATE}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/" || return 1
+	rsync -x -vaSH --stats --no-R "${TEMP}/${HOST}/${DATE}" ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${BACKUP}/${HOST}/" || return 1
 
 	echo "###### $(date) : Preparation done ######"
 }
@@ -160,7 +160,7 @@ prepare_backup() {
 perform_backup() {
 	local ret ret2
 
-	echo "###### $(date) : Saving (${FSLIST[@]}) to $REMOTE::$BACKUP ######"
+	echo "###### $(date) : Saving (${FSLIST[@]}) to ${REMOTE}${BACKUP} ######"
 
 	# compute the exclude args (--exclude foo --exclude bar ...). We start by
 	# excluding the temporary directory in order not to save our log file.
@@ -172,27 +172,27 @@ perform_backup() {
 
 	rsync --log-file="$TEMP/backup-$HOST-$DATE.log" -x -vaSHR --stats \
 	      "${EXCLARG[@]}" --link-dest="${BACKPFX}/${HOST}/LAST/" \
-	      "${FSLIST[@]}" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/${DATE}/"
+	      "${FSLIST[@]}" ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${BACKUP}/${HOST}/${DATE}/"
 	ret=$?
 	ret2=$ret
 	echo "return code: $ret" >> "$TEMP/backup-$HOST-$DATE.log"
 	echo "###### $(date) : done ret=$ret ######"
 
-	echo "###### $(date) : Uploading the log file to $REMOTE::$LOG ######"
-	rsync -x -vaSH --no-R --stats "$TEMP"/backup-*.log ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$LOG/${HOST}/"
+	echo "###### $(date) : Uploading the log file to ${REMOTE}${LOG} ######"
+	rsync -x -vaSH --no-R --stats "$TEMP"/backup-*.log ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${LOG}/${HOST}/"
 	ret=$?
 	echo "###### $(date) : done ret=$ret ######"
 
 	# in case of success, update LAST to point to the current backup
 	if [ $ret2 -ne 0 ]; then
-		echo "###### $(date) : Errors found (ret2=$ret2), NOT updating the LAST link on $REMOTE::$BACKUP ######"
+		echo "###### $(date) : Errors found (ret2=$ret2), NOT updating the LAST link on ${REMOTE}${BACKUP} ######"
 		return $ret2
 	fi
 
-	echo "###### $(date) : Updating the LAST link and adding the OK link on $REMOTE::$BACKUP ######"
+	echo "###### $(date) : Updating the LAST link and adding the OK link on ${REMOTE}${BACKUP} ######"
 	ln -sf "$DATE" "$TEMP/LAST"
 	ln -sf "$DATE" "$TEMP/${DATE}-OK"
-	rsync -x --delete -vaSH --no-R --stats "${TEMP}/LAST" "${TEMP}/${DATE}-OK" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+	rsync -x --delete -vaSH --no-R --stats "${TEMP}/LAST" "${TEMP}/${DATE}-OK" ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${BACKUP}/${HOST}/"
 	ret=$?
 	echo "###### $(date) : LAST done (ret=$ret) ######"
 	return 0
@@ -212,11 +212,11 @@ delete_backup() {
 
 		if [ "$1" = "good" ]; then
 			echo "Deleting successful backup $2 (age $3 days)"
-			rsync -r --delete --include "/$2/***" --exclude='*' "$TEMP/empty/" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
-			rsync -r --delete --include "/$2-OK" --exclude='*' "$TEMP/empty/" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+			rsync -r --delete --include "/$2/***" --exclude='*' "$TEMP/empty/" ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${BACKUP}/${HOST}/"
+			rsync -r --delete --include "/$2-OK" --exclude='*' "$TEMP/empty/" ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${BACKUP}/${HOST}/"
 		elif [ "$1" = "bad" ]; then
 			echo "Deleting failed backup $2 (age $3 days)"
-			rsync -r --delete --include "/$2/***" --exclude='*' "$TEMP/empty/" ${PASSFILE:+--password-file "$PASSFILE"} "$REMOTE::$BACKUP/${HOST}/"
+			rsync -r --delete --include "/$2/***" --exclude='*' "$TEMP/empty/" ${PASSFILE:+--password-file "$PASSFILE"} "${REMOTE}${BACKUP}/${HOST}/"
 		fi
 	else
 		if [ "$1" = "good" ]; then
@@ -351,7 +351,7 @@ purge_old() {
 #
 while [ -n "$1" -a -z "${1##-*}" ]; do
 	case "$1" in
-		"-s") REMOTE="$2" ; shift ;;
+		"-s") REMOTE="${2}::" ; shift ;;
 		"-p") PASSFILE="$2" ; shift ;;
 		"-b") BACKUP="$2" ; shift ;;
 		"-l") LOG="$2" ; shift ;;
@@ -376,7 +376,12 @@ if [ -z "$HOST" ]; then
 fi
 
 if [ -z "$REMOTE" -o -z "$BACKUP" ]; then
-	usage "Fatal: Both remote and backup must be specified."
+	usage "Fatal: Both remote and backup must be specified; use -s '' for local FS."
+fi
+
+# "" as a remote name turns into "::" and here means "local FS"
+if [ "$REMOTE" = "::" ]; then
+	REMOTE=""
 fi
 
 FSLIST=( "$@" )
