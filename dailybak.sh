@@ -166,8 +166,8 @@ perform_backup() {
 	# excluding the temporary directory in order not to save our log file.
 	EXCLARG=( --exclude "${TEMP}/" )
 	for excl in "${EXCLUDE[@]}"; do
-		EXCLARG[${#excl[@]}]="--exclude"
-		EXCLARG[${#excl[@]}]="$excl"
+		EXCLARG[${#EXCLARG[@]}]="--exclude"
+		EXCLARG[${#EXCLARG[@]}]="$excl"
 	done
 
 	rsync --log-file="$TEMP/backup-$HOST-$DATE.log" -x -vaSHR --stats \
